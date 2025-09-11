@@ -1,0 +1,380 @@
+{% load static %}
+{% csrf_token %}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>Benford 定律检测</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="{% static 'benford/app.css' %}" />
+  <link rel="stylesheet" href="{% static 'css/tech.css' %}">
+  <style>
+    .box { max-width: 980px; margin: 0 auto; }
+    .progress { width:100%; height:14px; background:#eee; border:1px solid #ddd; border-radius:7px; overflow:hidden; }
+    .bar { height:100%; width:0%; background:#4caf50; transition: width .3s; }
+    .muted { color:#666; font-size: 13px; }
+    .hidden { display:none; }
+    .row { margin: 12px 0; }
+    button { padding: 8px 14px; }
+    canvas { max-width: 820px; }
+    #failed-wrap { margin-top: 12px; color: #c62828; }
+    #failed-wrap h4 { margin: 8px 0; }
+    #failed-list { padding-left: 18px; }
+    table { border-collapse: collapse; margin: 8px 0; }
+    th, td { border: 1px solid #ddd; padding: 6px 10px; text-align: left; }
+    th { background: #fafafa; }
+    .kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: #f6f8fa; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+<div class="overlay"></div>
+<div class="container box">
+    <div class="header">
+      <h1 style="margin:0;">数据真实性检测（Benford）</h1>
+      {% if user.is_authenticated %}
+      <form action="{% url 'logout' %}" method="post">
+        {% csrf_token %}
+        <button type="submit" class="logout-btn">退出登录</button>
+      </form>
+      {% endif %}
+    </div>
+    <a href="{% url 'app_selector' %}" class="button">返回应用选择</a>
+
+    <form id="upload-form" class="row">
+      {% csrf_token %}
+      <input id="file-input" type="file" name="files" multiple />
+      <button type="submit">上传并分析</button>
+  </form>
+
+  <!-- 上传进度 -->
+  <div id="upload-wrap" class="row hidden">
+    <div class="muted">上传进度：<span id="upload-pct">0%</span></div>
+    <div class="progress"><div id="upload-bar" class="bar"></div></div>
+  </div>
+
+  <!-- 处理进度 -->
+  <div id="process-wrap" class="row hidden">
+    <div class="muted">
+      处理进度：<span id="proc-count">0</span>/<span id="proc-total">0</span>
+    </div>
+    <div class="progress"><div id="proc-bar" class="bar"></div></div>
+  </div>
+
+  <!-- 分析结果 -->
+  <div id="result" class="row hidden">
+    <h3>分析结果</h3>
+    <p id="conclusion"></p>
+
+    <div id="stats-wrap" class="row">
+      <div>总提取数字量：<span id="total-numbers" class="kbd">0</span></div>
+
+      <div class="row">
+        <strong>首位数字计数：</strong>
+        <table>
+          <thead><tr><th>首位</th><th>数量</th></tr></thead>
+          <tbody id="fd-counts-tbody"></tbody>
+        </table>
+          <div class="muted">卡方统计量（df=8）：<span id="chi-square" class="kbd">-</span>（用于衡量实际首位数字分布与 Benford 理论分布的差异程度）</div>
+      </div>
+    </div>
+
+    <div id="download-wrap" class="row hidden">
+      <a id="excel-link" href="#" target="_blank">下载结果 Excel</a>
+    </div>
+
+    <div id="top-files-wrap" class="row hidden"></div>
+
+    <canvas id="chart" width="820" height="420"></canvas>
+
+    <div id="sample-wrap" class="row">
+      <h3>样本数字预览</h3>
+      <div id="global-sample" class="muted"></div>
+    </div>
+    <!-- 失败文件清单 -->
+    <div id="failed-wrap" class="hidden">
+      <h4>以下文件解析失败：</h4>
+      <ul id="failed-list"></ul>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const form = document.getElementById('upload-form');
+  const fileInput = document.getElementById('file-input');
+
+  const upWrap = document.getElementById('upload-wrap');
+  const upBar  = document.getElementById('upload-bar');
+  const upPct  = document.getElementById('upload-pct');
+
+  const prWrap   = document.getElementById('process-wrap');
+  const prBar    = document.getElementById('proc-bar');
+  const prCount  = document.getElementById('proc-count');
+  const prTotal  = document.getElementById('proc-total');
+
+  const resultBox   = document.getElementById('result');
+  const conclusionP = document.getElementById('conclusion');
+  const chartEl     = document.getElementById('chart');
+
+  const totalNumbersEl = document.getElementById('total-numbers');
+  const fdCountsBody   = document.getElementById('fd-counts-tbody');
+  const chiSquareEl    = document.getElementById('chi-square');
+
+  const topFilesWrap = document.getElementById('top-files-wrap');
+
+  const globalSampleEl = document.getElementById('global-sample');
+  const downloadWrap = document.getElementById('download-wrap');
+  const excelLink = document.getElementById('excel-link');
+  
+  const failedWrap = document.getElementById('failed-wrap');
+  const failedList = document.getElementById('failed-list');
+
+  let chart;
+  let pollTimer = null;
+
+  function getCookie(name) {
+    const m = document.cookie.match('(^|;)\\s*' + name + '\\s*=\\s*([^;]+)');
+    return m ? decodeURIComponent(m.pop()) : '';
+  }
+  const CSRF = getCookie('csrftoken');
+
+  const basePath = (function () {
+    let p = window.location.pathname;
+    if (!p.endsWith('/')) p += '/';
+    return p;
+  })();
+
+  form.addEventListener('submit', function(e){
+    e.preventDefault();
+    const files = fileInput.files;
+    if (!files || !files.length) {
+      alert('请选择至少一个文件');
+      return;
+    }
+
+    // reset UI
+    upWrap.classList.remove('hidden');
+    prWrap.classList.add('hidden');
+    resultBox.classList.add('hidden');
+    failedWrap.classList.add('hidden');
+
+    upBar.style.width = '0%'; upPct.textContent = '0%';
+    prBar.style.width = '0%'; prCount.textContent = '0'; prTotal.textContent = '0';
+
+    const fd = new FormData(form);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', basePath + 'upload/');
+    xhr.setRequestHeader('X-CSRFToken', CSRF);
+
+    xhr.upload.onprogress = function (evt) {
+      if (evt.lengthComputable) {
+        const pct = Math.round(evt.loaded / evt.total * 100);
+        upBar.style.width = pct + '%';
+        upPct.textContent = pct + '%';
+      }
+    };
+
+    xhr.onload = function() {
+      upWrap.classList.add('hidden');
+      if (xhr.status !== 200) {
+        alert('上传失败：' + xhr.status);
+        return;
+      }
+      const resp = JSON.parse(xhr.responseText || '{}');
+      if (!resp.job_id) {
+        alert(resp.error || '启动任务失败');
+        return;
+      }
+      prWrap.classList.remove('hidden');
+      startPolling(resp.job_id);
+    };
+
+    xhr.onerror = function() {
+      upWrap.classList.add('hidden');
+      alert('上传发生错误');
+    };
+
+    xhr.send(fd);
+  });
+
+  function startPolling(jobId){
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(() => {
+      fetch(basePath + 'status/' + jobId + '/', {
+        headers: { 'X-Requested-With': 'fetch' }
+      })
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) {
+          clearInterval(pollTimer);
+          alert('任务错误：' + data.error);
+          return;
+        }
+        const total = data.total || 0;
+        const done  = data.processed || 0;
+        prTotal.textContent = total;
+        prCount.textContent = done;
+        const pct = total ? Math.round(done / total * 100) : 0;
+        prBar.style.width = Math.min(100, Math.max(0, pct)) + '%';
+
+        if (data.status === 'done') {
+          clearInterval(pollTimer);
+          renderResult(data.result, data.failed_files || []);
+        } else if (data.status === 'error') {
+          clearInterval(pollTimer);
+          alert('任务失败：' + (data.error || '未知错误'));
+        }
+      })
+      .catch(err => {
+        clearInterval(pollTimer);
+        console.error(err);
+        alert('查询进度失败');
+      });
+    }, 1000);
+  }
+
+  function renderResult(result, failedFiles){
+    if (!result) { alert('无结果返回'); return; }
+    resultBox.classList.remove('hidden');
+    conclusionP.textContent = result.conclusion || '';
+
+    // 基本统计
+    totalNumbersEl.textContent = result.total_numbers ?? 0;
+    chiSquareEl.textContent = (result.chi_square != null) ? result.chi_square.toFixed(3) : '-';
+
+    // 首位数字计数表
+    fdCountsBody.innerHTML = '';
+    const fdCounts = result.first_digit_counts || {};
+    for (let d = 1; d <= 9; d++) {
+      const tr = document.createElement('tr');
+      const td1 = document.createElement('td'); td1.textContent = d;
+      const td2 = document.createElement('td'); td2.textContent = fdCounts[d] ?? 0;
+      tr.appendChild(td1); tr.appendChild(td2);
+      fdCountsBody.appendChild(tr);
+    }
+
+    // 异常数字对应的文件及位数分布
+    const topByDigit = result.top_files_by_digit || {};
+    const lenDist = result.digit_length_distribution || {};
+    const topNums = result.digit_top_numbers || {};
+    const digits = Object.keys(topByDigit);
+    topFilesWrap.innerHTML = '';
+    if (digits.length) {
+      topFilesWrap.classList.remove('hidden');
+      const info = document.createElement('p');
+      info.textContent = `检测到频率高于理论值的首位数字：${digits.join(', ')}`;
+      topFilesWrap.appendChild(info);
+      digits.forEach(d => {
+        const section = document.createElement('div');
+        const h4 = document.createElement('h4');
+        h4.textContent = `首位 ${d} 出现最多的文件`;
+        section.appendChild(h4);
+
+        const ol = document.createElement('ol');
+        (topByDigit[d] || []).slice(0,20).forEach(item => {
+          const name = item.file ?? item[0] ?? '';
+          const cnt  = item.count ?? item[1] ?? 0;
+          const li = document.createElement('li');
+          li.textContent = `${name} (${cnt})`;
+          ol.appendChild(li);
+        });
+        section.appendChild(ol);
+
+        const ld = lenDist[d] || [];
+        if (ld.length) {
+          const h5 = document.createElement('h5');
+          h5.textContent = '位数分布（前五）';
+          section.appendChild(h5);
+          const ul = document.createElement('ul');
+          ld.forEach(([len, cnt]) => {
+            const li = document.createElement('li');
+            li.textContent = `${len} 位数: ${cnt}`;
+            ul.appendChild(li);
+          });
+          section.appendChild(ul);
+        }
+
+        const tn = topNums[d] || [];
+        if (tn.length) {
+          const h5 = document.createElement('h5');
+          h5.textContent = '高频数字上下文';
+          section.appendChild(h5);
+          const ul = document.createElement('ul');
+          tn.forEach(item => {
+            const li = document.createElement('li');
+            li.textContent = `${item.number} (${item.count}) - ${item.context}`;
+            ul.appendChild(li);
+          });
+          section.appendChild(ul);
+        }
+        topFilesWrap.appendChild(section);
+      });
+    } else {
+      topFilesWrap.classList.add('hidden');
+    }
+
+    // 全局样本（前 50 个）
+    const globalSample = result.global_sample || [];
+    globalSampleEl.textContent = globalSample.length
+      ? globalSample.slice(0,50).join(', ')
+      : '（无样本可展示）';
+
+    // 失败文件展示
+    if (failedFiles && failedFiles.length) {
+      failedWrap.classList.remove('hidden');
+      failedList.innerHTML = '';
+      failedFiles.forEach(s => {
+        const li = document.createElement('li'); li.textContent = s; failedList.appendChild(li);
+      });
+    } else {
+      failedWrap.classList.add('hidden');
+      failedList.innerHTML = '';
+    }
+
+    // 绘图
+    const labels = ['1','2','3','4','5','6','7','8','9'];
+    const actualCounts = labels.map(d => Number(fdCounts[parseInt(d)] || 0));
+    const totalFd = actualCounts.reduce((a, b) => a + b, 0);
+    const expectedCounts = labels.map(d => {
+      const pct = Number(result.expected && result.expected[parseInt(d)] || 0);
+      return totalFd * pct / 100;
+    });
+    const maxVal = Math.max(...actualCounts, ...expectedCounts);
+
+    if (chart) chart.destroy();
+    chart = new Chart(chartEl.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: '实际数量', data: actualCounts, backgroundColor: 'rgba(54,162,235,0.6)' },
+          { label: '理论数量', data: expectedCounts, type: 'line', borderColor: 'red', fill: false, tension: 0 }
+        ]
+      },
+      options: {
+        responsive: true,
+        scales: {
+          x: { title: { display: true, text: '首位数字' } },
+          y: {
+            beginAtZero: true,
+            max: Math.ceil(maxVal * 1.1),
+            ticks: { stepSize: Math.max(1, Math.ceil(maxVal / 10)), precision: 0 },
+            title: { display: true, text: '数量' }
+          }
+        }
+      }
+    });
+
+    // 下载链接（仅 Excel）
+    if (result.excel_url) {
+      excelLink.href = result.excel_url;
+      downloadWrap.classList.remove('hidden');
+    } else {
+      downloadWrap.classList.add('hidden');
+    }
+  }
+})();
+</script>
+</body>
+</html>

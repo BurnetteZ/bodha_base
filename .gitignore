@@ -1,0 +1,25 @@
+# 忽略 SQLite 数据库文件
+db.sqlite3
+*.sqlite3
+
+# 忽略 Python 缓存文件
+__pycache__/
+*.pyc
+
+# 忽略虚拟环境文件（若放在项目目录内）
+venv/
+.venv/
+
+# 忽略 Django migrations（可选，如果你不想把迁移文件提交）
+ ** 如果你确实需要跟踪 migration，则不要取消下面这一行的注释 **
+ */migrations/*.py
+ */migrations/*.pyc
+
+# 忽略媒体文件（上传的用户文件）
+media/
+
+# 忽略日志文件
+*.log
+老代码
+账号密码.txt
+requirements.txt

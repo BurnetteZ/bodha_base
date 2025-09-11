@@ -1,0 +1,79 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>Excel 合并</title>
+    <link rel="stylesheet" href="{% static 'css/tech.css' %}">
+</head>
+<body>
+<div class="overlay"></div>
+<div class="container">
+    <div class="header">
+        <h1 style="margin:0;">上传 Excel 文件进行合并</h1>
+        {% if user.is_authenticated %}
+        <form action="{% url 'logout' %}" method="post">
+            {% csrf_token %}
+            <button type="submit" class="logout-btn">退出登录</button>
+        </form>
+        {% endif %}
+    </div>
+    <a href="{% url 'app_selector' %}" class="button">返回应用选择</a>
+    <form id="merge-form" method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <input type="file" name="files" multiple required>
+        <p>一次最多可上传100个Excel文件。</p>
+        <button type="submit" class="button">合并</button>
+    </form>
+    <div id="progress-container" style="display:none; margin-top:20px;">
+        <progress id="progress-bar" value="0" max="100" style="width:100%;"></progress>
+        <span id="progress-text">0%</span>
+    </div>
+</div>
+<script>
+document.getElementById('merge-form').addEventListener('submit', function(e){
+    e.preventDefault();
+    const form = e.target;
+    const formData = new FormData(form);
+    const xhr = new XMLHttpRequest();
+    const progressContainer = document.getElementById('progress-container');
+    const progressBar = document.getElementById('progress-bar');
+    const progressText = document.getElementById('progress-text');
+    progressContainer.style.display = 'block';
+    const maxFiles = 100;
+    if (form.querySelector('input[type="file"]').files.length > maxFiles) {
+        alert('一次最多可上传' + maxFiles + '个Excel文件');
+        return;
+    }
+    xhr.open('POST', '', true);
+    xhr.responseType = 'blob';
+    xhr.upload.onprogress = function(e){
+        if (e.lengthComputable) {
+            const percent = Math.round((e.loaded / e.total) * 100);
+            progressBar.value = percent;
+            progressText.textContent = percent + '%';
+        }
+    };
+    xhr.onreadystatechange = function(){
+        if (xhr.readyState === 4){
+            if (xhr.status === 200){
+                progressBar.value = 100;
+                progressText.textContent = '100%';
+                const blob = new Blob([xhr.response], {type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = 'merged.xlsx';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            } else {
+                alert('合并失败: ' + xhr.responseText);
+            }
+            progressContainer.style.display = 'none';
+        }
+    };
+    xhr.send(formData);
+});
+</script>
+</body>
+</html>

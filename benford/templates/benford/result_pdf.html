@@ -1,0 +1,89 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>Benford 分析结果</title>
+  <style>
+    body { font-family: system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; padding:24px; background:#fff; }
+    .muted { color:#666; font-size:13px; }
+    .kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background:#f6f8fa; padding:2px 6px; border-radius:4px; }
+    table { border-collapse: collapse; margin: 8px 0; width:100%; }
+    th, td { border:1px solid #ddd; padding:6px 10px; text-align:left; }
+    th { background:#fafafa; }
+    h3 { margin-top:24px; }
+  </style>
+</head>
+<body>
+  <h1>数据真实性检测（Benford）结果</h1>
+  <p>{{ conclusion }}</p>
+  <div>总提取数字量：<span class="kbd">{{ total_numbers }}</span></div>
+  <div class="row">
+    <strong>首位数字计数：</strong>
+    <table>
+      <thead>
+        <tr><th>首位</th><th>数量</th><th>实际%</th><th>期望%</th></tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.digit }}</td>
+          <td>{{ r.count }}</td>
+          <td>{{ r.actual_pct|floatformat:2 }}</td>
+          <td>{{ r.expected_pct|floatformat:2 }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div class="muted">卡方统计量（df=8）：<span class="kbd">{% if chi_square != None %}{{ chi_square|floatformat:3 }}{% else %}-{% endif %}</span></div>
+  </div>
+
+  {% if top_sections %}
+    <h3>异常首位数字</h3>
+    {% for sec in top_sections %}
+      <h4>首位 {{ sec.digit }} 出现最多的文件</h4>
+      <ol>
+        {% for item in sec.files %}
+          <li>{{ item.file }} ({{ item.count }})</li>
+        {% endfor %}
+      </ol>
+      {% if sec.length_dist %}
+        <h5>位数分布（前五）</h5>
+        <ul>
+          {% for len,cnt in sec.length_dist %}
+            <li>{{ len }} 位数: {{ cnt }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      {% if sec.top_numbers %}
+        <h5>高频数字上下文</h5>
+        <ul>
+          {% for item in sec.top_numbers %}
+            <li>{{ item.number }} ({{ item.count }}) - {{ item.context }}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    {% endfor %}
+  {% endif %}
+
+  <h3>样本数字预览</h3>
+  <div class="muted">
+    {% if global_sample %}
+      {{ global_sample|join:", " }}
+    {% else %}
+      （无样本可展示）
+    {% endif %}
+  </div>
+
+  {% if failed_files %}
+    <div style="margin-top:12px;">
+      <h4>以下文件解析失败：</h4>
+      <ul>
+        {% for f in failed_files %}
+          <li>{{ f }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
+</body>
+</html>

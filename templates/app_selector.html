@@ -1,0 +1,26 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>应用选择</title>
+    <link rel="stylesheet" href="{% static 'css/tech.css' %}">
+</head>
+<body>
+<div class="overlay"></div>
+<div class="container">
+    <div class="header">
+        <h1 style="margin:0;">请选择应用</h1>
+        {% if user.is_authenticated %}
+        <form action="{% url 'logout' %}" method="post">
+            {% csrf_token %}
+            <button type="submit" class="logout-btn">退出登录</button>
+        </form>
+        {% endif %}
+    </div>
+    <a href="/search/upload/" class="button">搜索应用</a>
+    <a href="/benford/" class="button">Benford 应用</a>
+    <a href="/excel_merge/" class="button">Excel 合并应用</a>
+</div>
+</body>
+</html>
